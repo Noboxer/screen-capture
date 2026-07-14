@@ -303,7 +303,7 @@ final class CaptureManager {
                 setRecordingIndicator(false)
                 RecordingOverlay.shared.hide()
                 guard let tempURL = await recorder.stop() else { return }
-                saveVideoWithPanel(tempURL: tempURL)
+                autoSaveVideo(tempURL: tempURL)
                 return
             }
 
@@ -341,30 +341,43 @@ final class CaptureManager {
         (NSApp.delegate as? AppDelegate)?.setRecording(recording)
     }
 
-    private func saveVideoWithPanel(tempURL: URL) {
-        let panel = NSSavePanel()
+    /// Auto-save a finished recording — no save dialog. Mirrors the screenshot flow:
+    /// name it automatically, write it to the save folder (or ~/Movies by default),
+    /// and put the file on the clipboard so it can be pasted straight into Finder,
+    /// Slack, Mail, etc.
+    private func autoSaveVideo(tempURL: URL) {
+        let fm = FileManager.default
+
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"
-        panel.nameFieldStringValue = "Screen Recording \(formatter.string(from: Date())).mov"
-        panel.directoryURL = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
-        panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie]
-        panel.canCreateDirectories = true
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let stamp = formatter.string(from: Date())
 
-        NSApp.activate(ignoringOtherApps: true)
-        let response = panel.runModal()
-
-        if response == .OK, let dest = panel.url {
-            do {
-                try? FileManager.default.removeItem(at: dest)
-                try FileManager.default.moveItem(at: tempURL, to: dest)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(dest.path, forType: .string)
-                NSLog("[CaptureManager] Video saved → \(dest.path)")
-            } catch {
-                NSLog("[CaptureManager] Failed to move video: \(error)")
-            }
+        // Destination folder: the user's chosen save folder if enabled, else ~/Movies.
+        let folder: URL
+        if Preferences.shared.saveToFolder, let path = Preferences.shared.saveFolderPath {
+            folder = URL(fileURLWithPath: path)
         } else {
-            try? FileManager.default.removeItem(at: tempURL)
+            folder = fm.urls(for: .moviesDirectory, in: .userDomainMask).first
+                ?? fm.homeDirectoryForCurrentUser
+        }
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        var dest = folder.appendingPathComponent("Screen Recording \(stamp).mov")
+        if fm.fileExists(atPath: dest.path) {
+            dest = folder.appendingPathComponent("Screen Recording \(stamp) \(UUID().uuidString.prefix(4)).mov")
+        }
+
+        do {
+            try fm.moveItem(at: tempURL, to: dest)
+            // Copy the file itself to the clipboard (paste into Finder/Slack/Mail).
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([dest as NSURL])
+            scheduleAutoDelete()   // honor the clipboard auto-clear preference
+            NSLog("[CaptureManager] Video auto-saved → \(dest.path)")
+        } catch {
+            NSLog("[CaptureManager] Failed to save video: \(error)")
+            try? fm.removeItem(at: tempURL)
         }
     }
 }
