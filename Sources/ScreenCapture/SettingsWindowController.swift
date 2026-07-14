@@ -33,6 +33,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // Privacy tab
     private var autoDeletePopup: NSPopUpButton!
+    private var historyPopup:    NSPopUpButton!
+
+    // About tab
+    private var launchLoginCheck: NSButton!
 
     // MARK: – Init
 
@@ -69,6 +73,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         tabView.addTabViewItem(tabItem("Capture",    view: makeCaptureTab(size: cr.size)))
         tabView.addTabViewItem(tabItem("Annotation", view: makeAnnotationTab(size: cr.size)))
+        tabView.addTabViewItem(tabItem("Shortcuts",  view: makeShortcutsTab(size: cr.size)))
         tabView.addTabViewItem(tabItem("Video",      view: makeVideoTab(size: cr.size)))
         tabView.addTabViewItem(tabItem("Privacy",    view: makePrivacyTab(size: cr.size)))
         tabView.addTabViewItem(tabItem("About",      view: makeAboutTab(size: cr.size)))
@@ -165,6 +170,33 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return v
     }
 
+    // MARK: – Shortcuts tab (#1)
+
+    private func makeShortcutsTab(size: NSSize) -> NSView {
+        let v = NSView(frame: NSRect(origin: .zero, size: size))
+        var y = size.height - 12
+
+        y = sectionHead("Global Shortcuts", y, v)
+
+        for action in Preferences.ShortcutAction.allCases {
+            let rec = HotkeyRecorderButton(action: action)
+            rec.onChange = { shortcut in
+                Preferences.shared.setShortcut(shortcut, for: action)
+            }
+            y = row(label(action.title), rec, y, v)
+        }
+
+        let note = NSTextField(labelWithString:
+            "Click a shortcut, then press a new key combination including at least one modifier (⌃ ⌥ ⇧ ⌘). Press ⎋ to cancel.")
+        note.frame     = NSRect(x: 20, y: y - 32, width: 420, height: 30)
+        note.font      = .systemFont(ofSize: 11)
+        note.textColor = .tertiaryLabelColor
+        note.maximumNumberOfLines = 2
+        v.addSubview(note)
+
+        return v
+    }
+
     // MARK: – Video tab
 
     private func makeVideoTab(size: NSSize) -> NSView {
@@ -212,6 +244,29 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
         y = row(label("Clear clipboard"), autoDeletePopup, y, v)
 
+        y -= 10; separator(y, v); y -= 14
+
+        historyPopup = popup(
+            [("Off — don't keep", 0), ("1 hour", 3600), ("1 day", 86_400),
+             ("1 week", 604_800), ("30 days", 2_592_000)],
+            #selector(historyChanged)
+        )
+        y = row(label("Keep captures"), historyPopup, y, v)
+
+        let openBtn = NSButton(title: "Open History Folder", target: self,
+                               action: #selector(openHistoryFolderClicked))
+        openBtn.bezelStyle = .rounded
+        openBtn.font       = .systemFont(ofSize: 11)
+        y = row(label(""), openBtn, y, v)
+
+        let note = NSTextField(labelWithString:
+            "Finished screenshots are saved to a history folder and reopenable from the menu bar (Recent Captures). Older captures are deleted automatically.")
+        note.frame     = NSRect(x: 20, y: y - 34, width: 420, height: 32)
+        note.font      = .systemFont(ofSize: 11)
+        note.textColor = .tertiaryLabelColor
+        note.maximumNumberOfLines = 2
+        v.addSubview(note)
+
         return v
     }
 
@@ -237,26 +292,30 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         y -= 10; separator(y, v); y -= 14
 
-        y = sectionHead("Shortcuts", y, v)
+        y = sectionHead("Startup", y, v)
+        launchLoginCheck = checkBox("Start ScreenCapture at login", #selector(launchLoginToggled))
+        launchLoginCheck.frame = NSRect(x: 20, y: y - 22, width: 400, height: 18)
+        v.addSubview(launchLoginCheck)
+        y -= 32
 
-        for (name, key) in [("Capture Area", "⌃⇧S"), ("Capture Fullscreen", "⌃⇧F"),
-                             ("Record Video", "⌃⇧R"), ("Quit", "⌃⇧Q")] {
-            let nameLbl = NSTextField(labelWithString: name)
-            nameLbl.frame     = NSRect(x: 20, y: y - 18, width: 220, height: 18)
-            nameLbl.font      = .systemFont(ofSize: 13)
-            nameLbl.textColor = .labelColor
-            v.addSubview(nameLbl)
+        y -= 10; separator(y, v); y -= 14
 
-            let keyLbl = NSTextField(labelWithString: key)
-            keyLbl.frame     = NSRect(x: 310, y: y - 18, width: 120, height: 18)
-            keyLbl.font      = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            keyLbl.textColor = .secondaryLabelColor
-            keyLbl.alignment = .right
-            v.addSubview(keyLbl)
+        y = sectionHead("Updates", y, v)
+        let versionLbl = NSTextField(labelWithString: "Version \(Updater.currentVersion)")
+        versionLbl.frame     = NSRect(x: 20, y: y - 22, width: 200, height: 16)
+        versionLbl.font      = .systemFont(ofSize: 12)
+        versionLbl.textColor = .secondaryLabelColor
+        v.addSubview(versionLbl)
 
-            y -= 22
-        }
+        let updBtn = NSButton(title: "Check for Updates…", target: self,
+                              action: #selector(checkUpdatesClicked))
+        updBtn.bezelStyle = .rounded
+        updBtn.font       = .systemFont(ofSize: 12)
+        updBtn.frame      = NSRect(x: 250, y: y - 26, width: 180, height: 24)
+        v.addSubview(updBtn)
+        y -= 34
 
+        // Shortcuts are configured in the Shortcuts tab.
         return v
     }
 
@@ -280,6 +339,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         selectPopup(autoDeletePopup, value: p.autoDeleteSeconds)
         selectStringPopup(videoCodecPopup,  rawValue: p.videoCodec.rawValue)
         selectStringPopup(videoRegionPopup, rawValue: p.videoRegion.rawValue)
+
+        selectPopup(historyPopup, value: p.historyRetentionSeconds)
+        launchLoginCheck.state = p.launchAtLogin ? .on : .off
     }
 
     private func selectStringPopup(_ p: NSPopUpButton, rawValue: String) {
@@ -327,6 +389,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func annotCloseChanged() { Preferences.shared.annotationCloseSeconds = popupValue(annotClosePopup) }
     @objc private func autoDeleteChanged() { Preferences.shared.autoDeleteSeconds      = popupValue(autoDeletePopup) }
 
+    @objc private func historyChanged() {
+        Preferences.shared.historyRetentionSeconds = popupValue(historyPopup)
+        HistoryStore.shared.prune()   // apply the new window immediately
+    }
+
+    @objc private func openHistoryFolderClicked() {
+        NSWorkspace.shared.open(HistoryStore.shared.directory)
+    }
+
     @objc private func videoCodecChanged() {
         if let raw = videoCodecPopup.selectedItem?.representedObject as? String,
            let c   = Preferences.VideoCodec(rawValue: raw) {
@@ -338,6 +409,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
            let r   = Preferences.VideoRegion(rawValue: raw) {
             Preferences.shared.videoRegion = r
         }
+    }
+
+    @objc private func launchLoginToggled() {
+        let on = launchLoginCheck.state == .on
+        Preferences.shared.launchAtLogin = on
+        LoginItem.apply(on)
+    }
+
+    @objc private func checkUpdatesClicked() {
+        Updater.checkForUpdates(userInitiated: true)
     }
 
     @objc private func saveFolderToggled() {

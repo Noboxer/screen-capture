@@ -13,6 +13,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var annotCloseItem:   NSMenuItem?
     private var captureDelayItem: NSMenuItem?
 
+    // Capture-action items whose displayed shortcut mirrors the configurable
+    // global hotkeys (#1).
+    private var captureMenuItem:    NSMenuItem?
+    private var fullscreenMenuItem: NSMenuItem?
+    private var videoMenuItem:      NSMenuItem?
+
+    // Recent-captures submenu, rebuilt on each menu open (#8).
+    private var recentItem: NSMenuItem?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         CrashReporter.install()
         NSApp.setActivationPolicy(.accessory)
@@ -24,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // left users with no hotkeys AND no obvious next step.
         startHotkeyManager()
         requestScreenRecordingIfNeeded()
+        // Align the login-item registration with the stored preference (#6).
+        LoginItem.sync()
+        // Drop any captures that have outlived the retention window (#8).
+        HistoryStore.shared.prune()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -46,29 +59,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // ── Capture actions ─────────────────────────────────────────────────
         let captureItem = NSMenuItem(title: "Capture Area",
                                      action: #selector(menuCaptureArea),
-                                     keyEquivalent: "s")
+                                     keyEquivalent: "")
         captureItem.target = self
         captureItem.image  = menuIcon("rectangle.dashed.badge.record")
-        captureItem.keyEquivalentModifierMask = [.control, .shift]
+        applyShortcutDisplay(captureItem, .captureArea)
+        captureMenuItem = captureItem
         menu.addItem(captureItem)
 
         let fullItem = NSMenuItem(title: "Capture Fullscreen",
                                   action: #selector(menuCaptureFullscreen),
-                                  keyEquivalent: "f")
+                                  keyEquivalent: "")
         fullItem.target = self
         fullItem.image  = menuIcon("macwindow.on.rectangle")
-        fullItem.keyEquivalentModifierMask = [.control, .shift]
+        applyShortcutDisplay(fullItem, .captureFullscreen)
+        fullscreenMenuItem = fullItem
         menu.addItem(fullItem)
 
         menu.addItem(.separator())
 
         let videoItem = NSMenuItem(title: "Record Video",
                                    action: #selector(menuRecordVideo),
-                                   keyEquivalent: "r")
+                                   keyEquivalent: "")
         videoItem.target = self
         videoItem.image  = menuIcon("record.circle")
-        videoItem.keyEquivalentModifierMask = [.control, .shift]
+        applyShortcutDisplay(videoItem, .recordVideo)
+        videoMenuItem = videoItem
         menu.addItem(videoItem)
+
+        menu.addItem(.separator())
+
+        // ── Recent captures (rebuilt on open) ───────────────────────────────
+        let recent = NSMenuItem(title: "Recent Captures", action: nil, keyEquivalent: "")
+        recent.image   = menuIcon("clock.arrow.circlepath")
+        recent.submenu = NSMenu()
+        recentItem = recent
+        menu.addItem(recent)
 
         menu.addItem(.separator())
 
@@ -88,6 +113,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsItem.image  = menuIcon("gearshape")
         settingsItem.keyEquivalentModifierMask = .command
         menu.addItem(settingsItem)
+
+        let updateItem = NSMenuItem(title: "Check for Updates…",
+                                    action: #selector(menuCheckUpdates),
+                                    keyEquivalent: "")
+        updateItem.target = self
+        updateItem.image  = menuIcon("arrow.down.circle")
+        menu.addItem(updateItem)
 
         menu.addItem(.separator())
 
@@ -207,6 +239,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         captureDelayItem?.submenu?.items.forEach { si in
             si.state = (si.representedObject as? NSNumber)?.intValue == delay ? .on : .off
         }
+
+        // Reflect any shortcut rebinds done in Settings while the app is running.
+        captureMenuItem.map    { applyShortcutDisplay($0, .captureArea) }
+        fullscreenMenuItem.map { applyShortcutDisplay($0, .captureFullscreen) }
+        videoMenuItem.map      { applyShortcutDisplay($0, .recordVideo) }
+
+        rebuildRecentSubmenu()
+    }
+
+    // Rebuild the Recent Captures submenu from the history folder each time the
+    // menu opens (#8). Caps the list so the menu stays manageable.
+    private func rebuildRecentSubmenu() {
+        guard let submenu = recentItem?.submenu else { return }
+        submenu.removeAllItems()
+
+        guard Preferences.shared.historyRetentionSeconds > 0 else {
+            let off = NSMenuItem(title: "History is off — enable in Settings › Privacy", action: nil, keyEquivalent: "")
+            off.isEnabled = false
+            submenu.addItem(off)
+            return
+        }
+
+        let entries = HistoryStore.shared.entries()
+        if entries.isEmpty {
+            let none = NSMenuItem(title: "No recent captures", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            submenu.addItem(none)
+        } else {
+            for entry in entries.prefix(15) {
+                let item = NSMenuItem(title: HistoryStore.shared.label(for: entry),
+                                      action: #selector(openRecent(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.url
+                item.image = HistoryStore.shared.thumbnail(for: entry.url)
+                submenu.addItem(item)
+            }
+        }
+
+        submenu.addItem(.separator())
+        let openFolder = NSMenuItem(title: "Open History Folder", action: #selector(openHistoryFolder), keyEquivalent: "")
+        openFolder.target = self
+        submenu.addItem(openFolder)
+        let clear = NSMenuItem(title: "Clear History", action: #selector(clearHistory), keyEquivalent: "")
+        clear.target = self
+        clear.isEnabled = !entries.isEmpty
+        submenu.addItem(clear)
     }
 
     // MARK: – Menu icons (small, template-rendered)
@@ -224,8 +302,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let name = recording ? "record.circle.fill" : "camera.viewfinder"
         let img  = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(cfg)
+        // Template rendering lets macOS auto-invert the icon for light AND dark
+        // menu bars (#7). A forced tint (the old .labelColor) doesn't track the
+        // menu-bar appearance, so the icon vanished on a dark menu bar. Only the
+        // recording state keeps an explicit red tint.
+        img?.isTemplate = !recording
         statusItem?.button?.image = img
-        statusItem?.button?.contentTintColor = recording ? .systemRed : .labelColor
+        statusItem?.button?.contentTintColor = recording ? .systemRed : nil
     }
 
     // MARK: – Menu actions
@@ -234,6 +317,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func menuCaptureFullscreen() { CaptureManager.shared.captureFullscreen() }
     @objc private func menuRecordVideo()       { CaptureManager.shared.toggleVideo() }
     @objc private func menuSettings()          { SettingsWindowController.show() }
+    @objc private func menuCheckUpdates()      { Updater.checkForUpdates(userInitiated: true) }
+
+    @objc private func openRecent(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func openHistoryFolder() {
+        NSWorkspace.shared.open(HistoryStore.shared.directory)
+    }
+
+    @objc private func clearHistory() {
+        HistoryStore.shared.clearAll()
+    }
+
+    // Mirror a configurable global hotkey onto a status-menu item's displayed
+    // shortcut. Only single printable keys can render as a menu key-equivalent;
+    // others (arrows, function keys) leave the shortcut column blank.
+    private func applyShortcutDisplay(_ item: NSMenuItem, _ action: Preferences.ShortcutAction) {
+        let sc   = Preferences.shared.shortcut(for: action)
+        let name = Preferences.keyName(for: sc.keyCode)
+        item.keyEquivalent = name.count == 1 ? name.lowercased() : ""
+        item.keyEquivalentModifierMask = sc.modifiers
+    }
 
     @objc private func menuSetFormat(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,

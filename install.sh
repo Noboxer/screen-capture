@@ -5,7 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST_NAME="com.thea.screencapture"
 APP_DEST="/Applications/ScreenCapture.app"
-PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 
 echo "=== ScreenCapture installer ==="
 echo ""
@@ -36,57 +36,58 @@ else
     echo "  ⚠ Icon generation failed (continuing without it)"
 fi
 
-# Ad-hoc codesign the bundle with a stable identifier matching the bundle ID.
-# Without this, every rebuild produces an unsigned binary that macOS treats as
-# a brand-new app, creating duplicate entries in Privacy & Security and prompting
-# for Screen Recording / Accessibility on every install. Ad-hoc signing pins the
-# identifier to the bundle ID so TCC has a stable handle.
+# Codesign the bundle. A stable self-signed identity (created by
+# scripts/setup-signing.sh) keeps macOS from dropping the app's Screen Recording +
+# Accessibility grants on every rebuild/update — ad-hoc signing does NOT, because
+# its code hash changes each build and TCC then treats the app as brand new.
+# Falls back to ad-hoc if the identity hasn't been set up.
+SIGN_IDENTITY="ScreenCapture Self-Signed"
+# Note: not `-v` — a self-signed cert is untrusted (CSSMERR_TP_NOT_TRUSTED) so it
+# never appears in the "valid" list, but codesign can still sign with it, and the
+# resulting designated requirement is pinned to the cert (stable across rebuilds).
+if security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+    SIGN_WITH="$SIGN_IDENTITY"
+    echo "Signing with stable identity: $SIGN_IDENTITY"
+else
+    SIGN_WITH="-"
+    echo "Signing ad-hoc (permissions reset on each update)."
+    echo "  → Run scripts/setup-signing.sh once to make grants persist across updates."
+fi
 codesign --force --deep --options runtime \
     --identifier com.thea.screencapture \
-    --sign - "$APP_DEST"
-echo "  ✓ Installed and ad-hoc signed: $APP_DEST"
+    --sign "$SIGN_WITH" "$APP_DEST"
+echo "  ✓ Installed and signed: $APP_DEST"
 
 # Nudge Finder/LaunchServices to pick up the new icon.
 touch "$APP_DEST"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
     -f "$APP_DEST" >/dev/null 2>&1 || true
 
-# 3. LaunchAgent plist — launch the binary inside the bundle
-mkdir -p "$HOME/Library/LaunchAgents"
-cat > "$PLIST_PATH" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$PLIST_NAME</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$APP_DEST/Contents/MacOS/ScreenCapture</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$HOME/Library/Logs/screen-capture.log</string>
-  <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/screen-capture-error.log</string>
-</dict>
-</plist>
-PLIST
-echo "  ✓ LaunchAgent written: $PLIST_PATH"
+# 3. Migrate away from the legacy KeepAlive LaunchAgent.
+# Older installs registered autostart via a launchd agent with KeepAlive=true.
+# Start-at-login is now handled in-app by SMAppService (toggle in Settings → About),
+# so the agent is unloaded and removed. KeepAlive also meant "Quit" respawned the
+# app — dropping it makes Quit actually quit.
+if [ -f "$LEGACY_PLIST" ]; then
+    echo "Removing legacy LaunchAgent..."
+    launchctl unload "$LEGACY_PLIST" 2>/dev/null || true
+    rm -f "$LEGACY_PLIST"
+    echo "  ✓ Legacy autostart removed"
+fi
 
-# 4. Load the agent
-launchctl unload "$PLIST_PATH" 2>/dev/null || true
-launchctl load  "$PLIST_PATH"
-echo "  ✓ Daemon started"
+# Stop any running instance so the freshly-installed one takes over cleanly.
+pkill -x ScreenCapture 2>/dev/null || true
+sleep 1
+
+# 4. Launch. On first run the app registers itself as a login item because the
+#    "Start at login" preference defaults on (change it in Settings → About).
+open "$APP_DEST"
+echo "  ✓ Launched"
 
 echo ""
 echo "=== Installation complete ==="
 echo ""
-echo "Hotkeys:"
+echo "Default hotkeys (rebindable in Settings → Shortcuts):"
 echo "  Ctrl+Shift+S  →  Screenshot (area select) → annotate → clipboard"
 echo "  Ctrl+Shift+F  →  Screenshot (fullscreen)  → annotate → clipboard"
 echo "  Ctrl+Shift+R  →  Start / stop video recording"
@@ -96,6 +97,5 @@ echo "Grant these permissions when prompted:"
 echo "  • Screen Recording  (System Settings → Privacy & Security → Screen Recording)"
 echo "  • Accessibility     (System Settings → Privacy & Security → Accessibility)"
 echo ""
-echo "Logs: ~/Library/Logs/screen-capture.log"
-echo "To stop:    launchctl unload $PLIST_PATH"
-echo "To restart: launchctl load   $PLIST_PATH"
+echo "Start at login:  Settings → About → Startup  (on by default)"
+echo "Check for updates: menu bar icon → Check for Updates…"

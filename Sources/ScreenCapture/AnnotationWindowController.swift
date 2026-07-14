@@ -14,10 +14,12 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
     private var canvasView: AnnotationCanvasView!
     private var statusLabel: NSTextField!
     private var toolButtonRow: [NSButton] = []
+    private var sizeSlider: NSSlider?
 
     private var idleTimer:       Timer?
     private var autoCopyTimer:   Timer?
     private var editingStarted   = false
+    private var isEditingText    = false   // true while an inline text editor is open (#3)
 
     // Inactivity auto-close countdown
     private var countdownTimer:    Timer?
@@ -60,10 +62,11 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
         let statusH:  CGFloat = 28
 
         // Minimum width required for the toolbar to render every control without
-        // overlap. Sum of: 8 tools (32px each) + group gap + 7 colors (24px each) +
-        // gap + size slider group (~100px) + center gap + 4 action buttons (~240px)
-        // + edge padding. Keep this in sync with makeToolbar's layout math.
-        let minToolbarW: CGFloat = 900
+        // overlap. The left group (tools + colors + size slider) ends at ~600px;
+        // the right group (Undo/Clear | Cancel/Done) needs ~342px from the right
+        // edge. 900 was too small — the slider overlapped Undo — so this leaves a
+        // comfortable gap between the two groups. Keep in sync with makeToolbar.
+        let minToolbarW: CGFloat = 1000
 
         let maxW  = screen.visibleFrame.width  * 0.92
         let maxH  = screen.visibleFrame.height * 0.92 - toolbarH - statusH
@@ -97,8 +100,12 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
         // proper rounded-rect window with shadow tracking the rounded shape.
         win.backgroundColor             = .clear
         win.isOpaque                    = false
-        win.isMovable                   = false
-        win.isMovableByWindowBackground = false
+        // Movable by dragging the window background (#2). The canvas overrides
+        // mouseDownCanMoveWindow=false so drawing never moves the window; the
+        // toolbar / status strip (plain NSViews) act as drag handles, while the
+        // buttons and slider (NSControls) return false and stay clickable.
+        win.isMovable                   = true
+        win.isMovableByWindowBackground = true
         win.hasShadow                   = true
         win.level                       = .floating
         win.appearance                  = NSAppearance(named: .darkAqua)
@@ -157,17 +164,27 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp,
                        .rightMouseDown, .keyDown, .scrollWheel]
         ) { [weak self] event in
-            guard event.window === self?.window else { return event }
+            guard let self, event.window === self.window else { return event }
 
             if event.type == .keyDown,
                event.modifierFlags.contains(.command),
-               let chars = event.charactersIgnoringModifiers?.lowercased(),
-               chars == "q" || chars == "w" {
-                self?.commitAndClose()
-                return nil   // consume so NSBeep / text-field don't react
+               let chars = event.charactersIgnoringModifiers?.lowercased() {
+                if chars == "q" || chars == "w" {
+                    self.commitAndClose()
+                    return nil   // consume so NSBeep / text-field don't react
+                }
+                if chars == "b" {
+                    self.canvasView.toggleSelectedTextBox()   // toggle text background box (#9)
+                    return nil
+                }
             }
 
-            self?.startOrResetCountdown()
+            // Any interaction resets both auto-close clocks so the window never
+            // closes out from under an active user (#3). Suspended while typing.
+            if !self.isEditingText {
+                self.startOrResetCountdown()
+                self.resetIdleTimerIfActive()
+            }
             return event
         }
 
@@ -259,6 +276,7 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
                               target: self, action: #selector(sizeChanged(_:)))
         slider.frame = NSRect(x: x, y: (toolbarH - 20) / 2, width: 90, height: 20)
         bar.addSubview(slider)
+        sizeSlider = slider
 
         // ── Right group: action buttons (placed right-to-left) ───────────────
         // Each button is uniform width so the row reads cleanly. Buttons use a
@@ -381,12 +399,20 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
         setToolHighlight(sender)
     }
 
+    // Colour / size changes set the default for new annotations AND restyle the
+    // currently selected annotation, so picking a colour recolours what you just
+    // drew — not only the next thing (#4).
     @objc private func colorSelected(_ sender: ColorSwatchButton) {
         canvasView.style.color = sender.swatchColor
+        canvasView.applySelectedColor(sender.swatchColor)
     }
 
     @objc private func sizeChanged(_ sender: NSSlider) {
-        canvasView.style.size = CGFloat(sender.integerValue)
+        let value = CGFloat(sender.integerValue)
+        canvasView.style.size = value
+        // Commit one undo step at the end of a drag rather than on every tick.
+        let commit = NSApp.currentEvent?.type == .leftMouseUp
+        canvasView.applySelectedSize(value, commitHistory: commit)
     }
 
     @objc private func undoStroke() { canvasView.undo();              scheduleAutoCopy() }
@@ -405,6 +431,25 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
 
     func canvasDidFinishStroke() {
         scheduleAutoCopy()
+    }
+
+    // While a text editor is open, freeze every auto-close mechanism so the window
+    // can't vanish mid-typing (#3). Resume the configured countdown on commit.
+    func canvasEditingTextChanged(isEditing: Bool) {
+        isEditingText = isEditing
+        if isEditing {
+            cancelIdleTimer()
+            countdownTimer?.invalidate(); countdownTimer = nil
+            countdownBar.isHidden = true
+            setStatus("Editing text  ·  Return to finish  ·  ⌘B for box")
+        } else {
+            startOrResetCountdown()
+        }
+    }
+
+    // Keep the toolbar size slider in sync with the selected annotation (#4).
+    func canvasSelectionChanged(style: DrawingStyle?) {
+        if let s = style { sizeSlider?.integerValue = Int(s.size) }
     }
 
     // MARK: – Clipboard
@@ -440,14 +485,25 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
 
     private func cancelIdleTimer() { idleTimer?.invalidate(); idleTimer = nil }
 
+    // Restart the short idle-close clock on interaction, but only while it's the
+    // active mechanism (annotationCloseSeconds == 0) and the user hasn't yet begun
+    // annotating. This is what keeps the window alive while the user reaches for a
+    // tool before placing the first text box / stroke (#3).
+    private func resetIdleTimerIfActive() {
+        guard idleTimer != nil, !editingStarted else { return }
+        cancelIdleTimer()
+        scheduleIdleTimer()
+    }
+
     // Starts (or restarts) the inactivity countdown from the full configured duration.
     // Called from windowDidBecomeKey and by the local event monitor on every user action.
     private func startOrResetCountdown() {
         countdownTimer?.invalidate()
         countdownTimer = nil
 
+        // Never run the countdown while a text editor is open (#3).
         let secs = Preferences.shared.annotationCloseSeconds
-        guard secs > 0 else {
+        guard secs > 0, !isEditingText else {
             countdownBar.isHidden = true
             return
         }
@@ -499,7 +555,10 @@ final class AnnotationWindowController: NSWindowController, NSWindowDelegate,
 
     private func commitAndClose() {
         autoCopyTimer?.invalidate()
-        copyCurrentToClipboard()
+        if let img = canvasView?.exportComposite() {
+            CaptureManager.shared.copyToClipboard(img, scale: captureScale)
+            HistoryStore.shared.saveScreenshot(img, scale: captureScale)   // archive final result (#8)
+        }
         window?.close()
     }
 

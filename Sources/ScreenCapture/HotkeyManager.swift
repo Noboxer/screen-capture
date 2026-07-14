@@ -1,12 +1,6 @@
 import AppKit
 import CoreGraphics
 
-// Key codes are hardware layout-independent (US keyboard positions)
-private let kVK_Q: Int64 = 12
-private let kVK_R: Int64 = 15
-private let kVK_S: Int64 =  1
-private let kVK_F: Int64 =  3
-
 /// Self-healing global hotkey manager.
 ///
 /// macOS will silently disable a CGEvent tap under several conditions:
@@ -173,28 +167,42 @@ final class HotkeyManager {
 
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
-        let flags   = event.flags
-        let ctrl    = flags.contains(.maskControl)
-        let shift   = flags.contains(.maskShift)
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let mods    = pressedModifiers(event.flags)
 
-        guard ctrl && shift else { return Unmanaged.passUnretained(event) }
+        // Ignore plain keystrokes so we never hijack normal typing — a shortcut
+        // must carry at least one modifier.
+        guard !mods.isEmpty else { return Unmanaged.passUnretained(event) }
 
-        switch keyCode {
-        case kVK_S:
-            DispatchQueue.main.async { CaptureManager.shared.captureArea() }
-            return nil   // consume event
-        case kVK_F:
-            DispatchQueue.main.async { CaptureManager.shared.captureFullscreen() }
-            return nil
-        case kVK_R:
-            DispatchQueue.main.async { CaptureManager.shared.toggleVideo() }
-            return nil
-        case kVK_Q:
-            DispatchQueue.main.async { NSApp.terminate(nil) }
-            return nil
-        default:
-            return Unmanaged.passUnretained(event)
+        // Preferences are read live on every keyDown, so rebinding a shortcut in
+        // Settings takes effect immediately with no re-registration (#1).
+        for action in Preferences.ShortcutAction.allCases {
+            let sc = Preferences.shared.shortcut(for: action)
+            if sc.keyCode == keyCode, sc.modifiers == mods {
+                DispatchQueue.main.async { HotkeyManager.perform(action) }
+                return nil   // consume event
+            }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    /// Translate CGEvent flags into device-independent modifier flags for comparison
+    /// against stored shortcuts.
+    private func pressedModifiers(_ flags: CGEventFlags) -> NSEvent.ModifierFlags {
+        var m = NSEvent.ModifierFlags()
+        if flags.contains(.maskControl)   { m.insert(.control) }
+        if flags.contains(.maskShift)     { m.insert(.shift) }
+        if flags.contains(.maskAlternate) { m.insert(.option) }
+        if flags.contains(.maskCommand)   { m.insert(.command) }
+        return m
+    }
+
+    private static func perform(_ action: Preferences.ShortcutAction) {
+        switch action {
+        case .captureArea:       CaptureManager.shared.captureArea()
+        case .captureFullscreen: CaptureManager.shared.captureFullscreen()
+        case .recordVideo:       CaptureManager.shared.toggleVideo()
+        case .quit:              NSApp.terminate(nil)
         }
     }
 }
