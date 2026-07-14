@@ -14,7 +14,7 @@ final class VideoRecorder: NSObject, @unchecked Sendable {
 
     // MARK: - Start
 
-    func start(sourceRect: CGRect? = nil) async throws {
+    func start(sourceRect: CGRect? = nil, excludeWindowNumbers: [Int] = []) async throws {
         guard !isRecording else { return }
 
         // Track partial-init state so we can unwind cleanly if any step throws.
@@ -70,7 +70,9 @@ final class VideoRecorder: NSObject, @unchecked Sendable {
         videoInput   = input
         pixelAdaptor = adaptor
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // Exclude our own overlay/HUD windows so they never appear in the capture.
+        let excluded = content.windows.filter { excludeWindowNumbers.contains(Int($0.windowID)) }
+        let filter = SCContentFilter(display: display, excludingWindows: excluded)
         let config = SCStreamConfiguration()
         config.width       = width
         config.height      = height

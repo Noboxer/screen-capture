@@ -309,27 +309,26 @@ final class CaptureManager {
 
             // Determine recording region from preferences. The hotkey is the same
             // whether the user wants fullscreen or area — they pick once in Settings.
+            // The overlay/HUD are shown BEFORE starting capture so their window
+            // numbers can be excluded from the stream (#11/#12).
             let sourceRect: CGRect?
-            var overlayRegion: CGRect?          // AppKit screen coords, for the recording overlay
-            var overlayScreen: NSScreen?
+            let stopHandler = { CaptureManager.shared.toggleVideo() }
             switch Preferences.shared.videoRegion {
             case .fullscreen:
                 sourceRect = nil
+                let screen = NSScreen.main ?? NSScreen.screens[0]
+                RecordingOverlay.shared.showControlsOnly(on: screen, onStop: stopHandler)
             case .selection:
                 guard let selection = await SelectionOverlay.selectRect() else { return }
                 let screen = NSScreen.main ?? NSScreen.screens[0]
-                sourceRect    = scRect(from: selection, screen: screen)
-                overlayRegion = selection
-                overlayScreen = screen
+                sourceRect = scRect(from: selection, screen: screen)
+                RecordingOverlay.shared.show(region: selection, on: screen, onStop: stopHandler)
             }
 
             do {
-                try await recorder.start(sourceRect: sourceRect)
+                try await recorder.start(sourceRect: sourceRect,
+                                         excludeWindowNumbers: RecordingOverlay.shared.windowNumbers())
                 setRecordingIndicator(true)
-                // Show the "what's being recorded" overlay for area recordings (#11).
-                if let region = overlayRegion, let screen = overlayScreen {
-                    RecordingOverlay.shared.show(region: region, on: screen)
-                }
             } catch {
                 NSLog("[CaptureManager] Video start failed: \(error)")
                 RecordingOverlay.shared.hide()
