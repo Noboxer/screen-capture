@@ -1,0 +1,13 @@
+# Swift Package Manager build output
+.build/
+*.dSYM/
+
+# macOS
+.DS_Store
+
+# Session/scratch artifacts
+CLAUDE.session.md
+.pancake-local/
+
+# Release artifacts (attached to GitHub Releases, not tracked)
+dist/

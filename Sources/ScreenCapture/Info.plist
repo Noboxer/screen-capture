@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>ScreenCapture</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.thea.screencapture</string>
+  <key>CFBundleName</key>
+  <string>ScreenCapture</string>
+  <key>CFBundleDisplayName</key>
+  <string>ScreenCapture</string>
+  <key>CFBundleVersion</key>
+  <string>1.0</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>ScreenCapture needs this to take screenshots and record video.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>ScreenCapture needs Accessibility permission to register global hotkeys.</string>
+</dict>
+</plist>

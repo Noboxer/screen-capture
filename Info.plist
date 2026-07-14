@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.thea.screencapture</string>
+  <key>CFBundleName</key>
+  <string>ScreenCapture</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundleExecutable</key>
+  <string>ScreenCapture</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+
+  <!-- Run as a background agent — no Dock icon -->
+  <key>LSUIElement</key>
+  <true/>
+
+  <!-- Permission prompts shown to the user -->
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>ScreenCapture needs Screen Recording access to take screenshots and record video.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>ScreenCapture needs Accessibility access to register global hotkeys.</string>
+</dict>
+</plist>
