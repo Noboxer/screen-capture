@@ -160,6 +160,7 @@ extension VideoRecorder: SCStreamOutput, SCStreamDelegate {
         // Surface the failure in the menu bar so the user sees we're no longer recording.
         DispatchQueue.main.async {
             (NSApp.delegate as? AppDelegate)?.setRecording(false)
+            RecordingOverlay.shared.hide()
         }
     }
 }

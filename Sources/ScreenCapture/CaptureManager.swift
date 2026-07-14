@@ -301,6 +301,7 @@ final class CaptureManager {
         Task { @MainActor in
             if recorder.active {
                 setRecordingIndicator(false)
+                RecordingOverlay.shared.hide()
                 guard let tempURL = await recorder.stop() else { return }
                 saveVideoWithPanel(tempURL: tempURL)
                 return
@@ -309,20 +310,29 @@ final class CaptureManager {
             // Determine recording region from preferences. The hotkey is the same
             // whether the user wants fullscreen or area — they pick once in Settings.
             let sourceRect: CGRect?
+            var overlayRegion: CGRect?          // AppKit screen coords, for the recording overlay
+            var overlayScreen: NSScreen?
             switch Preferences.shared.videoRegion {
             case .fullscreen:
                 sourceRect = nil
             case .selection:
                 guard let selection = await SelectionOverlay.selectRect() else { return }
                 let screen = NSScreen.main ?? NSScreen.screens[0]
-                sourceRect = scRect(from: selection, screen: screen)
+                sourceRect    = scRect(from: selection, screen: screen)
+                overlayRegion = selection
+                overlayScreen = screen
             }
 
             do {
                 try await recorder.start(sourceRect: sourceRect)
                 setRecordingIndicator(true)
+                // Show the "what's being recorded" overlay for area recordings (#11).
+                if let region = overlayRegion, let screen = overlayScreen {
+                    RecordingOverlay.shared.show(region: region, on: screen)
+                }
             } catch {
                 NSLog("[CaptureManager] Video start failed: \(error)")
+                RecordingOverlay.shared.hide()
                 handleCaptureError(error)
             }
         }
